@@ -18,10 +18,32 @@ type AvailableSlot = {
     id: string;
     name: string;
     specialty: string;
+  } | {
+    id: string;
+    name: string;
+    specialty: string;
+  }[];
+};
+
+type DisplaySlot = {
+  id: string;
+  start_time: string;
+  end_time: string;
+  doctors: {
+    id: string;
+    name: string;
+    specialty: string;
   };
 };
 
 type MyAppointment = {
+  id: string;
+  status: "active" | "done" | "cancelled";
+  slots: { start_time: string; end_time: string } | { start_time: string; end_time: string }[];
+  doctors: { name: string; specialty: string } | { name: string; specialty: string }[];
+};
+
+type DisplayAppointment = {
   id: string;
   status: "active" | "done" | "cancelled";
   slots: { start_time: string; end_time: string };
@@ -38,73 +60,109 @@ function formatDateTime(iso: string) {
 export default function PatientDashboard() {
   const router = useRouter();
   const [patient, setPatient] = useState<Patient | null>(null);
-  const [availableSlots, setAvailableSlots] = useState<AvailableSlot[]>([]);
-  const [myAppointments, setMyAppointments] = useState<MyAppointment[]>([]);
+  const [availableSlots, setAvailableSlots] = useState<DisplaySlot[]>([]);
+  const [myAppointments, setMyAppointments] = useState<DisplayAppointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionMsg, setActionMsg] = useState("");
   const [bookingSlotId, setBookingSlotId] = useState<string | null>(null);
+  const [cancellingAppointmentId, setCancellingAppointmentId] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+  async function loadDashboard(): Promise<void> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-      if (!user) {
-        router.push("/patient/login");
-        return;
-      }
-
-      const { data: patientData } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("id", user.id)
-        .single();
-
-      if (!patientData) {
-        router.push("/patient/login");
-        return;
-      }
-
-      setPatient(patientData);
-
-      const { data: slotsData } = await supabase
-        .from("slots")
-        .select("id, start_time, end_time, doctors(id, name, specialty)")
-        .eq("is_booked", false)
-        .order("start_time");
-
-      setAvailableSlots((slotsData as AvailableSlot[]) ?? []);
-
-      const { data: apptData } = await supabase
-        .from("appointments")
-        .select(
-          "id, status, slots(start_time, end_time), doctors(name, specialty)"
-        )
-        .eq("patient_id", user.id)
-        .order("created_at", { ascending: false });
-
-      setMyAppointments((apptData as MyAppointment[]) ?? []);
-      setLoading(false);
+    if (!user) {
+      router.push("/patient/login");
+      return;
     }
 
-    load();
+    const { data: patientData } = await supabase
+      .from("patients")
+      .select("*")
+      .eq("id", user.id)
+      .single();
+
+    if (!patientData) {
+      router.push("/patient/login");
+      return;
+    }
+
+    setPatient(patientData);
+
+    const { data: slotsData } = await supabase
+      .from("slots")
+      .select("id, start_time, end_time, doctors(id, name, specialty)")
+      .eq("is_booked", false)
+      .order("start_time");
+
+    const formattedSlots = (slotsData as AvailableSlot[] | null)?.map((s) => ({
+      ...s,
+      doctors: Array.isArray(s.doctors) ? s.doctors[0] : s.doctors,
+    })) ?? [];
+
+    setAvailableSlots(formattedSlots);
+
+    const { data: apptData } = await supabase
+      .from("appointments")
+      .select(
+        "id, status, slots(start_time, end_time), doctors(name, specialty)"
+      )
+      .eq("patient_id", user.id)
+      .order("created_at", { ascending: false });
+
+    const formattedAppts = (apptData as MyAppointment[] | null)?.map((a) => ({
+      ...a,
+      slots: Array.isArray(a.slots) ? a.slots[0] : a.slots,
+      doctors: Array.isArray(a.doctors) ? a.doctors[0] : a.doctors,
+    })) ?? [];
+
+    setMyAppointments(formattedAppts);
+  }
+
+  useEffect(() => {
+    loadDashboard()
+      .catch(() => {
+        setActionMsg("Could not load appointments right now.");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, [router]);
+
+  async function getAccessToken(): Promise<string | null> {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    return session?.access_token ?? null;
+  }
 
   async function handleBook(slotId: string, doctorId: string) {
     setActionMsg("");
     setBookingSlotId(slotId);
 
+    const token = await getAccessToken();
+    if (!token) {
+      setActionMsg("Your session has expired. Please log in again.");
+      setBookingSlotId(null);
+      router.push("/patient/login");
+      return;
+    }
+
     const res = await fetch("/api/appointments/book", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ slotId, doctorId }),
     });
     const data = await res.json();
 
     if (res.ok) {
       setActionMsg("Appointment booked successfully!");
-      setAvailableSlots((prev) => prev.filter((s) => s.id !== slotId));
+      await loadDashboard();
     } else {
       setActionMsg(data.error ?? "Booking failed.");
     }
@@ -114,23 +172,34 @@ export default function PatientDashboard() {
 
   async function handleCancel(appointmentId: string) {
     setActionMsg("");
+    setCancellingAppointmentId(appointmentId);
+
+    const token = await getAccessToken();
+    if (!token) {
+      setActionMsg("Your session has expired. Please log in again.");
+      setCancellingAppointmentId(null);
+      router.push("/patient/login");
+      return;
+    }
+
     const res = await fetch("/api/appointments/cancel", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ appointmentId, action: "cancel" }),
     });
     const data = await res.json();
 
     if (res.ok) {
       setActionMsg("Appointment cancelled.");
-      setMyAppointments((prev) =>
-        prev.map((a) =>
-          a.id === appointmentId ? { ...a, status: "cancelled" } : a
-        )
-      );
+      await loadDashboard();
     } else {
       setActionMsg(data.error ?? "Cancellation failed.");
     }
+
+    setCancellingAppointmentId(null);
   }
 
   async function handleLogout() {
@@ -256,9 +325,10 @@ export default function PatientDashboard() {
                         {appt.status === "active" && (
                           <button
                             onClick={() => handleCancel(appt.id)}
+                            disabled={cancellingAppointmentId === appt.id}
                             className="rounded bg-red-600 px-3 py-1 text-xs text-white hover:bg-red-700"
                           >
-                            Cancel
+                            {cancellingAppointmentId === appt.id ? "Cancelling..." : "Cancel"}
                           </button>
                         )}
                       </td>

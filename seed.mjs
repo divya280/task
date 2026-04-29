@@ -11,11 +11,29 @@ const doctors = [
   { email: "doctor3@test.com", password: "doctor123", name: "Doctor 3", specialty: "Dermatology" },
 ];
 
+const admin = {
+  email: "admin@test.com",
+  password: "admin123",
+};
+
 const patients = [
   { email: "patient1@test.com", password: "patient123", name: "Patient 1" },
   { email: "patient2@test.com", password: "patient123", name: "Patient 2" },
   { email: "patient3@test.com", password: "patient123", name: "Patient 3" },
 ];
+
+function createUtcISOString(daysFromNow, hourUtc, minuteUtc) {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + daysFromNow);
+  date.setUTCHours(hourUtc, minuteUtc, 0, 0);
+  return date.toISOString();
+}
+
+function plusOneHour(iso) {
+  const date = new Date(iso);
+  date.setUTCHours(date.getUTCHours() + 1);
+  return date.toISOString();
+}
 
 const doctorIds = {};
 const patientIds = {};
@@ -26,18 +44,26 @@ for (const doctor of doctors) {
     password: doctor.password,
     email_confirm: true,
   });
-  if (error) { console.error("create user", doctor.email, error.message); continue; }
 
-  doctorIds[doctor.email] = data.user.id;
+  if (error) {
+    console.error("create user", doctor.email, error.message);
+    const { data: existingUsers } = await supabase.auth.admin.listUsers();
+    const existingUser = existingUsers?.users.find((user) => user.email === doctor.email);
+    if (!existingUser) continue;
+    doctorIds[doctor.email] = existingUser.id;
+  } else {
+    doctorIds[doctor.email] = data.user.id;
+  }
 
-  const { error: e } = await supabase.from("doctors").insert({
-    id: data.user.id,
+  const { error: e } = await supabase.from("doctors").upsert({
+    id: doctorIds[doctor.email],
     name: doctor.name,
     email: doctor.email,
     specialty: doctor.specialty,
   });
-  if (e) console.error("insert doctor", doctor.email, e.message);
-  else console.log("created", doctor.email);
+
+  if (e) console.error("upsert doctor", doctor.email, e.message);
+  else console.log("seeded", doctor.email);
 }
 
 for (const patient of patients) {
@@ -46,17 +72,37 @@ for (const patient of patients) {
     password: patient.password,
     email_confirm: true,
   });
-  if (error) { console.error("create user", patient.email, error.message); continue; }
 
-  patientIds[patient.email] = data.user.id;
+  if (error) {
+    console.error("create user", patient.email, error.message);
+    const { data: existingUsers } = await supabase.auth.admin.listUsers();
+    const existingUser = existingUsers?.users.find((user) => user.email === patient.email);
+    if (!existingUser) continue;
+    patientIds[patient.email] = existingUser.id;
+  } else {
+    patientIds[patient.email] = data.user.id;
+  }
 
-  const { error: e } = await supabase.from("patients").insert({
-    id: data.user.id,
+  const { error: e } = await supabase.from("patients").upsert({
+    id: patientIds[patient.email],
     name: patient.name,
     email: patient.email,
   });
-  if (e) console.error("insert patient", patient.email, e.message);
-  else console.log("created", patient.email);
+
+  if (e) console.error("upsert patient", patient.email, e.message);
+  else console.log("seeded", patient.email);
+}
+
+const { data: adminId, error: adminError } = await supabase.rpc("seed_system_admin", {
+  p_email: admin.email,
+  p_password: admin.password,
+});
+
+if (adminError || !adminId) {
+  console.error("seed admin", adminError?.message ?? "unknown error");
+  process.exit(1);
+} else {
+  console.log("seeded", admin.email);
 }
 
 const d1 = doctorIds["doctor1@test.com"];
@@ -64,25 +110,41 @@ const d2 = doctorIds["doctor2@test.com"];
 const d3 = doctorIds["doctor3@test.com"];
 const p1 = patientIds["patient1@test.com"];
 
-const { data: slots, error: slotsError } = await supabase.from("slots").insert([
-  { doctor_id: d1, start_time: "2026-04-28 09:00:00+00", end_time: "2026-04-28 10:00:00+00", is_booked: true  },
-  { doctor_id: d1, start_time: "2026-04-29 10:00:00+00", end_time: "2026-04-29 11:00:00+00", is_booked: false },
-  { doctor_id: d1, start_time: "2026-05-04 09:00:00+00", end_time: "2026-05-04 10:00:00+00", is_booked: false },
-  { doctor_id: d1, start_time: "2026-05-06 11:00:00+00", end_time: "2026-05-06 12:00:00+00", is_booked: false },
-  { doctor_id: d2, start_time: "2026-04-28 11:00:00+00", end_time: "2026-04-28 12:00:00+00", is_booked: false },
-  { doctor_id: d2, start_time: "2026-04-30 09:00:00+00", end_time: "2026-04-30 10:00:00+00", is_booked: false },
-  { doctor_id: d2, start_time: "2026-05-05 10:00:00+00", end_time: "2026-05-05 11:00:00+00", is_booked: false },
-  { doctor_id: d2, start_time: "2026-05-07 09:00:00+00", end_time: "2026-05-07 10:00:00+00", is_booked: false },
-  { doctor_id: d3, start_time: "2026-04-29 09:00:00+00", end_time: "2026-04-29 10:00:00+00", is_booked: false },
-  { doctor_id: d3, start_time: "2026-04-30 11:00:00+00", end_time: "2026-04-30 12:00:00+00", is_booked: false },
-  { doctor_id: d3, start_time: "2026-05-04 11:00:00+00", end_time: "2026-05-04 12:00:00+00", is_booked: false },
-  { doctor_id: d3, start_time: "2026-05-07 10:00:00+00", end_time: "2026-05-07 11:00:00+00", is_booked: false },
-]).select();
+const slotTemplates = [
+  { doctor_id: d1, start_time: createUtcISOString(1, 9, 0) },
+  { doctor_id: d1, start_time: createUtcISOString(2, 10, 0) },
+  { doctor_id: d1, start_time: createUtcISOString(5, 9, 0) },
+  { doctor_id: d1, start_time: createUtcISOString(7, 11, 0) },
+  { doctor_id: d2, start_time: createUtcISOString(1, 11, 0) },
+  { doctor_id: d2, start_time: createUtcISOString(3, 9, 0) },
+  { doctor_id: d2, start_time: createUtcISOString(6, 10, 0) },
+  { doctor_id: d2, start_time: createUtcISOString(8, 9, 0) },
+  { doctor_id: d3, start_time: createUtcISOString(2, 9, 0) },
+  { doctor_id: d3, start_time: createUtcISOString(3, 11, 0) },
+  { doctor_id: d3, start_time: createUtcISOString(5, 11, 0) },
+  { doctor_id: d3, start_time: createUtcISOString(8, 10, 0) },
+];
 
-if (slotsError) { console.error("insert slots", slotsError.message); process.exit(1); }
-console.log("created slots");
+await supabase.from("appointments").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+await supabase.from("slots").delete().neq("id", "00000000-0000-0000-0000-000000000000");
 
-const bookedSlot = slots.find((s) => s.doctor_id === d1 && s.is_booked === true);
+const slotsPayload = slotTemplates.map((slot, index) => ({
+  doctor_id: slot.doctor_id,
+  start_time: slot.start_time,
+  end_time: plusOneHour(slot.start_time),
+  is_booked: index === 0,
+}));
+
+const { data: slots, error: slotsError } = await supabase.from("slots").insert(slotsPayload).select();
+
+if (slotsError) {
+  console.error("insert slots", slotsError.message);
+  process.exit(1);
+}
+
+console.log("seeded slots");
+
+const bookedSlot = slots.find((slot) => slot.doctor_id === d1 && slot.is_booked);
 
 const { error: apptError } = await supabase.from("appointments").insert({
   patient_id: p1,
@@ -90,7 +152,8 @@ const { error: apptError } = await supabase.from("appointments").insert({
   slot_id: bookedSlot.id,
   status: "active",
 });
+
 if (apptError) console.error("insert appointment", apptError.message);
-else console.log("created pre-existing appointment");
+else console.log("seeded pre-existing appointment");
 
 console.log("done");

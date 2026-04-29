@@ -22,6 +22,14 @@ type Appointment = {
   id: string;
   status: "active" | "done" | "cancelled";
   created_at: string;
+  patients: { name: string } | { name: string }[];
+  slots: { start_time: string; end_time: string } | { start_time: string; end_time: string }[];
+};
+
+type DisplayAppointment = {
+  id: string;
+  status: "active" | "done" | "cancelled";
+  created_at: string;
   patients: { name: string };
   slots: { start_time: string; end_time: string };
 };
@@ -37,78 +45,107 @@ export default function DoctorDashboard() {
   const router = useRouter();
   const [doctor, setDoctor] = useState<Doctor | null>(null);
   const [slots, setSlots] = useState<Slot[]>([]);
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [appointments, setAppointments] = useState<DisplayAppointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionMsg, setActionMsg] = useState("");
+  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+  async function loadDashboard(): Promise<void> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-      if (!user) {
-        router.push("/doctor/login");
-        return;
-      }
-
-      const { data: doctorData } = await supabase
-        .from("doctors")
-        .select("*")
-        .eq("id", user.id)
-        .single();
-
-      if (!doctorData) {
-        router.push("/doctor/login");
-        return;
-      }
-
-      setDoctor(doctorData);
-
-      const { data: slotData } = await supabase
-        .from("slots")
-        .select("*")
-        .eq("doctor_id", user.id)
-        .order("start_time");
-
-      setSlots(slotData ?? []);
-
-      const { data: apptData } = await supabase
-        .from("appointments")
-        .select("id, status, created_at, patients(name), slots(start_time, end_time)")
-        .eq("doctor_id", user.id)
-        .order("created_at", { ascending: false });
-
-      setAppointments((apptData as Appointment[]) ?? []);
-      setLoading(false);
+    if (!user) {
+      router.push("/doctor/login");
+      return;
     }
 
-    load();
+    const { data: doctorData } = await supabase
+      .from("doctors")
+      .select("*")
+      .eq("id", user.id)
+      .single();
+
+    if (!doctorData) {
+      router.push("/doctor/login");
+      return;
+    }
+
+    setDoctor(doctorData);
+
+    const { data: slotData } = await supabase
+      .from("slots")
+      .select("*")
+      .eq("doctor_id", user.id)
+      .order("start_time");
+
+    setSlots(slotData ?? []);
+
+    const { data: apptData } = await supabase
+      .from("appointments")
+      .select("id, status, created_at, patients(name), slots(start_time, end_time)")
+      .eq("doctor_id", user.id)
+      .order("created_at", { ascending: false });
+
+    const formattedAppts = (apptData as Appointment[] | null)?.map((a) => ({
+      ...a,
+      patients: Array.isArray(a.patients) ? a.patients[0] : a.patients,
+      slots: Array.isArray(a.slots) ? a.slots[0] : a.slots,
+    })) ?? [];
+
+    setAppointments(formattedAppts);
+  }
+
+  useEffect(() => {
+    loadDashboard()
+      .catch(() => {
+        setActionMsg("Could not load appointments right now.");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, [router]);
+
+  async function getAccessToken(): Promise<string | null> {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    return session?.access_token ?? null;
+  }
 
   async function handleAction(
     appointmentId: string,
     action: "done" | "cancel"
   ) {
     setActionMsg("");
+    setPendingActionId(appointmentId);
+
+    const token = await getAccessToken();
+    if (!token) {
+      setActionMsg("Your session has expired. Please log in again.");
+      setPendingActionId(null);
+      router.push("/doctor/login");
+      return;
+    }
+
     const res = await fetch("/api/appointments/cancel", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ appointmentId, action }),
     });
     const data = await res.json();
     if (res.ok) {
-      setActionMsg("Updated successfully.");
-      setAppointments((prev) =>
-        prev.map((a) =>
-          a.id === appointmentId
-            ? { ...a, status: action === "done" ? "done" : "cancelled" }
-            : a
-        )
-      );
+      setActionMsg(action === "done" ? "Appointment marked done." : "Appointment cancelled.");
+      await loadDashboard();
     } else {
       setActionMsg(data.error ?? "Something went wrong.");
     }
+
+    setPendingActionId(null);
   }
 
   async function handleLogout() {
@@ -227,15 +264,17 @@ export default function DoctorDashboard() {
                           <div className="flex gap-2">
                             <button
                               onClick={() => handleAction(appt.id, "done")}
+                              disabled={pendingActionId === appt.id}
                               className="rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-700"
                             >
-                              Done
+                              {pendingActionId === appt.id ? "Saving..." : "Done"}
                             </button>
                             <button
                               onClick={() => handleAction(appt.id, "cancel")}
+                              disabled={pendingActionId === appt.id}
                               className="rounded bg-red-600 px-3 py-1 text-xs text-white hover:bg-red-700"
                             >
-                              Cancel
+                              {pendingActionId === appt.id ? "Saving..." : "Cancel"}
                             </button>
                           </div>
                         )}

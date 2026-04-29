@@ -5,6 +5,23 @@
 node_modules/
 .next/
 out/
+dist/
+build/
+
+# Build artifacts
+tsconfig.tsbuildinfo
+*.log
+next-*.log
+verify-*.log
+*.err.log
+*.out.log
+
+# Temporary files
+migrate-*.mjs
+apply-migration.mjs
+run-migration.mjs
+migration-*.sql
+migration-*.txt
 
 .DS_Store
 *.pem

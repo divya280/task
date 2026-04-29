@@ -13,7 +13,7 @@
    npm install
    ```
 
-5. Seed the database (creates all users, slots, and a sample appointment):
+5. Seed the database (creates all users, the admin login, slots, and a sample appointment):
    ```bash
    npm run seed
    ```
