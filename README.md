@@ -2,8 +2,6 @@
 
 A full-stack appointment booking platform built with Next.js, TypeScript, and Supabase with comprehensive testing and role-based access control.
 
-**Robustness Rating: 8.5/10** - Production-ready system with strong security and comprehensive test coverage.
-
 ---
 
 ## Table of Contents
